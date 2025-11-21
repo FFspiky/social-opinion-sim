@@ -1,0 +1,23 @@
+# === 基础库 ===
+requests>=2.31.0
+python-dotenv>=1.0.0
+
+# === NLP / Embedding ===
+sentence-transformers>=2.2.2
+scikit-learn>=1.3.0
+numpy>=1.23.0
+
+# === 数据处理 ===
+pandas>=2.0.0
+
+# === 图网络 ===
+networkx>=3.0
+
+# === 可视化 & Web 展示 ===
+streamlit>=1.36.0
+matplotlib>=3.7.0
+
+# === LangChain ===
+langchain>=0.3.0
+langchain-openai>=0.2.0
+langchain-core>=0.3.0

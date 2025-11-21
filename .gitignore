@@ -1,0 +1,14 @@
+# Python 缓存
+__pycache__/
+*.pyc
+
+# 虚拟环境
+venv/
+
+# 环境变量（API Key 等）
+.env
+
+# Streamlit 本地配置
+.streamlit/
+
+# 其它不需要的本地文件可以加在这里

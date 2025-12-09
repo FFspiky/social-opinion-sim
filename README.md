@@ -1,86 +1,61 @@
-# 多智能体舆论博弈模拟（话题热度预测版，双衰减核）
+# 多智能体舆论博弈模拟（话题热度预测版）
 
-基于大模型的多智能体舆论模拟小实验，聚焦多话题关注、话题热度与霍克斯自激传播，提供 Streamlit 前端展示。热度预测部分已升级为双衰减核（爆发+长尾）的自激模型。
+基于多代理 + Hawkes 双衰减核（爆发/长尾）的舆论演化实验，提供训练、模拟、前端对比。
 
-## 功能亮点
-- 多角色 Agent（官方、愤怒用户、中立吃瓜、忠实粉丝、媒体），支持多话题注意力分配与记忆流。
-- 话题管理与热度：TopicManager 记录帖子与热度；预测侧使用双衰减核自激模型（mu_fast/mu_slow + lambda_fast/lambda_slow + H_base）。
-- Streamlit 前端：查看时间步帖子列表、情绪标签、话题热度变化，可在侧边栏直接输入双衰减参数。
-- 本地小模型嵌入：默认 `all-MiniLM-L6-v2`（存放于 `models/`，可自行下载或运行导出脚本）。
+## 最新要点
+- 5 个代表性微博画像：权威媒体/官方、KOL、杠精、护卫队、吃瓜群众，默认话题为最新训练集前 5 个（哈工大你玩真的啊、为啥网上的药比实体药店更便宜、晒晒家乡隐藏款土特产、太空发快递可以当日达了、春晚节目）。
+- 最新 Hawkes 最优参数（未归一化）：mu_fast=0.58896, mu_slow=0.19392, H_base=1.81348, lambda_fast=4.99670, lambda_slow=0.66370；默认 heat_scale=1e4 便于对齐真实量级。
+- 模拟支持权重调度：爆发角色用 lambda_fast 衰减，长尾角色用 lambda_slow，按热度和上次发声时间决定出场概率（约 40%/步）。
+- 前端可一键加载默认真实数据（`../huoju/dataset_peak350/classified_events_35_2024Q1-Q4_peak350_v2.csv`），自动对齐时间步并计算 MSE/MAPE，绘制 Sim vs Real 对比。
 
-## 目录结构
-- `simulate.py`：命令行入口，单次运行与话题热度演示。
-- `app_streamlit.py`：前端入口，交互式查看模拟结果，支持输入双衰减核参数。
-- `agents/agent.py`：Agent 逻辑，含话题注意力、互动与记忆更新。
-- `agents/llm_client.py`：封装 SiliconFlow DeepSeek 接口。
-- `agents/memory.py`：记忆流与反思（SentenceTransformer）。
-- `agents/multi_agent_system.py`：多代理容器。
-- `env/social_env.py`：社交环境、话题管理器、霍克斯传播。
-- `utils/spread_model.py`：双衰减核自激预测器（爆发/长尾双时间常数）及兼容占位 `HawkesProcess`。
-- `train.py`：全局参数拟合脚本（双衰减核），读取 `datasets/*.csv` 做 80/10/10 切分，最小化 34 个事件 Train+Val 平均 MSE。
-- `test_oos.py`：基于最优参数的测试集（最后 10%）MSE/MAPE 评估与可视化。
-- `run_simulation.cmd`：Windows 一键脚本（创建 venv + 运行 Streamlit）。
-- `export_embedding_model.py`：下载/导出 `all-MiniLM-L6-v2` 至 `models/`。
+## 功能概览
+- 多角色 Agent：5 画像（official_media / kol / troll / defender / crowd），话题注意力分配与记忆流。
+- 话题热度：TopicManager 记录帖子与热度，双衰减核（mu_fast/mu_slow/H_base/lambda_fast/lambda_slow）+ 可调 heat_scale。
+- 前端：自定义话题与时间步（默认 350），展示热度曲线、帖子列表、Agent 时间线；支持真实数据对比（MAPE/MSE）。
 
-## 环境准备
-1) 安装 Python 3.10+（推荐 3.11/3.12）。
-2) 创建虚拟环境并安装依赖：
-   ```bash
-   python -m venv venv
-   # PowerShell: .\venv\Scripts\Activate.ps1
-   # macOS/Linux: source venv/bin/activate
-   pip install -r requirements.txt
-   ```
-3) 配置大模型 API（SiliconFlow DeepSeek-Terminus）  
-   在项目根目录创建 `.env`：
-   ```env
-   SILICONFLOW_API_KEY=你的APIKey
-   SILICONFLOW_BASE_URL=https://api.siliconflow.cn/v1
-   SILICONFLOW_MODEL=deepseek-ai/DeepSeek-V3.1-Terminus
-   ```
-4) 嵌入模型  
-   - 运行 `python export_embedding_model.py` 将 `all-MiniLM-L6-v2` 保存到 `models/all-MiniLM-L6-v2`。  
-   - 如不想提交模型文件，请在 `.gitignore` 忽略 `models/`（已默认忽略）。
+## 数据
+- 默认真实/训练参考：`../huoju/dataset_peak350/classified_events_35_2024Q1-Q4_peak350_v2.csv`（topic, heat, timestamp，约 350 步/话题）。
+- 旧示例：`datasets/`、`datasets_huoju*`、`classified_events_35.csv` 等。
 
-## 运行方式
-### 命令行单次模拟
+## 依赖与环境
 ```bash
-python simulate.py           # 默认 T=8, seed=123
+python -m venv venv
+# PowerShell: .\venv\Scripts\Activate.ps1
+# macOS/Linux: source venv/bin/activate
+pip install -r requirements.txt
 ```
-`run_once` 中可调整时间步、随机种子等参数。
 
-### Streamlit 前端
+## 训练（双衰减核）
+```bash
+python train.py --data_dir datasets_huoju_norm
+python train.py --data_dir datasets_huoju_norm --random_test --seed 123
+```
+模型形式：
+```
+pred_t = H_base + mu_fast*M_fast + mu_slow*M_slow
+M_fast = M_fast*exp(-lambda_fast) + y_{t-1}
+M_slow = M_slow*exp(-lambda_slow) + y_{t-1}
+约束：lambda_fast > lambda_slow > 0
+```
+
+## 模拟与对比
+- 命令行单次模拟并对比默认真实数据：
+```bash
+python simulate.py   # __main__ 调用 run_and_compare，T=350，默认话题与参数
+```
+- Streamlit 前端：
 ```bash
 streamlit run app_streamlit.py
-# 浏览器访问 http://localhost:8501 交互体验
+# 浏览器访问 http://localhost:8501
 ```
-Windows 可直接运行 `run_simulation.cmd`，自动创建/激活 venv 并启动前端。
+侧边栏：时间步、随机种子、默认话题（可自定义），可选“使用默认真实数据”，也可上传 CSV（time/topic/heat 或 timestamp/topic/heat）。自动计算总体/分话题 MAPE、MSE 并绘图。
 
-### 话题热度与传播演示
-`simulate.py` 末尾提供示例：多代理容器 + TopicManager + 霍克斯传播，展示多话题热度随时间的变化。
+## 主要文件
+- `simulate.py`：默认最优参数、权重调度、run_and_compare（Sim vs Real 图与 MSE/MAPE）。
+- `app_streamlit.py`：前端交互，默认加载最新真实数据，可上传替换。
+- `agents/agent.py`：角色提示/行为决策；`env/social_env.py`：热度管理、Agent 出场权重调度。
+- `train.py` / `utils/data_loader.py`：训练加载与参数拟合；`utils/spread_model.py`：双衰减核预测。
 
-### 全局参数拟合（双衰减核）
-```bash
-python train.py
-```
-默认读取 `datasets/*.csv`，按时间 80/10/10 切分。模型：
-```
-pred_t = H_base + mu_fast * M_fast + mu_slow * M_slow
-M_fast = M_fast * exp(-lambda_fast) + y_{t-1}
-M_slow = M_slow * exp(-lambda_slow) + y_{t-1}
-约束：lambda_fast > lambda_slow > 0，所有参数正
-```
-优化目标：34 个事件 Train+Val 平均 MSE（teacher forcing）。输出 Train+Val/Test 的 MSE 与 MAPE，并逐事件 Test 结果。
-
-### 测试集评估与可视化
-在 `test_oos.py` 中填入最优参数后运行：
-```bash
-python test_oos.py
-```
-会打印 Test 平均 MSE/MAPE，并随机绘制 4 个事件的真实/预测曲线（2x2 图）。
-
-## 注意事项
-- 需要外部 LLM API；无密钥或离线环境运行示例会失败，请提前配置 `.env`。
-- 模型目录 `models/` 体积较大（约 90MB），如需推送到 GitHub，建议使用 Git LFS 或保持忽略。
-- 虚拟环境目录 `.venv/` / `venv/` 不应提交，已在 `.gitignore` 忽略。
-- 本项目仅为演示/教学用途，示例数据非真实业务数据，可根据需要调整角色设定和话题规则。
+## 注意
+- 需要可用的 LLM API Key（见 `agents/llm_client.py`）；受限网络请自配代理/离线策略。
+- heat_scale 可按真实量级调节；权重调度可在 `env/social_env.py` 进一步微调爆发/长尾参与度。

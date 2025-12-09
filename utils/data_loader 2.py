@@ -16,7 +16,7 @@ def load_all_datasets(
     加载 data_dir 下的所有 CSV。
     默认按时间顺序 80/10/10 切分；
     若 random_test=True，则随机抽取 10% 时间点为 test（保持时间顺序输出），其余按时间顺序 80/10 切分。
-    若 normalize=True，则对单个事件按 |heat| 的最大值做归一化，并返回 scale。
+    若 normalize=True，则按单个事件的 max 绝对值进行归一化，并返回 scale。
     """
     if not os.path.isdir(data_dir):
         print(f"[data_loader] 数据目录不存在：{data_dir}")

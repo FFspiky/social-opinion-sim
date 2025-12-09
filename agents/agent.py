@@ -238,11 +238,29 @@ class Agent:
           "topic": 可选话题
         }
         """
+        role_prompts = {
+            "official_media": (
+                "你是权威媒体/官方账号，语气正式客观，强调核实、等待通报，不信谣不传谣。"
+            ),
+            "kol": (
+                "你是微博意见领袖/营销号，带节奏、善用反问和悬念，语气接地气，情绪化以求流量。"
+            ),
+            "troll": (
+                "你是极端情绪用户/杠精，发言尖锐、嘲讽、攻击或阴阳怪气，擅长挑衅。"
+            ),
+            "defender": (
+                "你是死忠粉/护卫队，极度护短，控评、呼吁理性，反击黑子，充满爱意或防御性。"
+            ),
+            "crowd": (
+                "你是吃瓜群众，超短评、跟风、好奇打卡，立场摇摆，偶尔只@好友或发表情。"
+            ),
+        }
+        role_hint = role_prompts.get(self.role, "你是一个普通用户，保持简洁、多样化表达，避免复读。")
         system = (
-            "你是一个在中文社交媒体上发言的用户或账号。"
-            "你需要根据用户记忆和看到的帖子，决定是否发声。"
-            "请严格按照用户提供的 JSON 格式输出结果，不要输出多余文字。"
-            "所有内容必须使用简体中文，不要出现任何英文单词或句子。"
+            f"{role_hint}"
+            " 你需要根据记忆和看到的帖子，决定是否发声。"
+            " 严格输出 JSON，不要输出多余文字。"
+            " 所有内容必须使用简体中文。"
         )
         forced_topic = self.select_topic(environment=environment)
         user = self._build_social_prompt(t, observed_posts, forced_topic=forced_topic)

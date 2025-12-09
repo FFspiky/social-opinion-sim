@@ -2,12 +2,23 @@ import random
 import numpy as np
 import matplotlib.pyplot as plt
 
+from config.settings import get_data_dir, load_hawkes_params
 from utils.data_loader import load_all_datasets
 from utils.spread_model import HawkesPredictor
 
 
-# 可硬编码最优参数（需在运行 train.py 后更新）
-BEST_PARAMS = np.array([0.8505534125, 0.0862380168, 4.9818004704, 4.4057477813, 1.9738589443], dtype=float)
+# 优先从工件读取最优参数，避免与训练/模拟漂移
+_params = load_hawkes_params()
+BEST_PARAMS = np.array(
+    [
+        _params["mu_fast"],
+        _params["mu_slow"],
+        _params["H_base"],
+        _params["lambda_fast"],
+        _params["lambda_slow"],
+    ],
+    dtype=float,
+)
 
 
 def compute_mape(y_true: np.ndarray, y_pred: np.ndarray) -> float:
@@ -30,7 +41,7 @@ def main():
     plt.rcParams["font.sans-serif"] = ["Arial Unicode MS", "Microsoft YaHei", "DejaVu Sans"]
     plt.rcParams["axes.unicode_minus"] = False
 
-    events = load_all_datasets("datasets")
+    events = load_all_datasets(str(get_data_dir()))
 
     metrics = []
     for ev in events:

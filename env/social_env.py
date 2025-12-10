@@ -7,6 +7,7 @@ import time
 import random
 
 import networkx as nx
+import numpy as np
 
 
 @dataclass
@@ -109,7 +110,8 @@ class SocialEnv:
     - G：关注关系图
     - agents：name -> Agent
     - posts：历史帖子列表
-    - topic_manager：记录各话题热度
+    - topic_manager：记录各话题热度并驱动双衰减 Hawkes 记忆
+    - 每步计算 lifecycle phase / global_tension，并注入 env_context 影响 Agent 决策
     """
 
     def __init__(
@@ -130,6 +132,19 @@ class SocialEnv:
             TopicManager(self._topics, hawkes_params) if self._topics else None
         )
         self._agent_last_action: Dict[str, int] = {name: 0 for name in agents}
+        hp = hawkes_params or {}
+        self.params = {
+            "mu_fast": hp.get("mu_fast", 0.5),
+            "mu_slow": hp.get("mu_slow", 0.2),
+            "H_base": hp.get("H_base", 0.0),
+            "lambda_fast": hp.get("lambda_fast", 1.0),
+            "lambda_slow": hp.get("lambda_slow", 0.3),
+        }
+        self.M_fast = 0.0
+        self.M_slow = 0.0
+        self.current_intensity = 0.0
+        self.phase = "Incubation"
+        self.official_has_spoken = False
 
     def reset(self):
         self.posts = []
@@ -138,6 +153,11 @@ class SocialEnv:
         if self._topics:
             self.topic_manager = TopicManager(self._topics, self._hawkes_params)
         self._agent_last_action = {name: 0 for name in self.agents}
+        self.M_fast = 0.0
+        self.M_slow = 0.0
+        self.current_intensity = 0.0
+        self.phase = "Incubation"
+        self.official_has_spoken = False
 
     def _compute_reach(self, author: str) -> int:
         """简单地以关注入度作为传播影响力近似。"""
@@ -145,6 +165,38 @@ class SocialEnv:
             return int(self.G.in_degree(author))
         except Exception:
             return 0
+
+    def _update_hawkes_state(self, new_posts_count: int) -> None:
+        """
+        使用双衰减核递推更新 Hawkes 状态，无需回溯历史。
+        """
+        self.M_fast = self.M_fast * np.exp(-self.params["lambda_fast"]) + new_posts_count
+        self.M_slow = self.M_slow * np.exp(-self.params["lambda_slow"]) + new_posts_count
+        intensity = (
+            self.params["H_base"]
+            + self.params["mu_fast"] * self.M_fast
+            + self.params["mu_slow"] * self.M_slow
+        )
+        self.current_intensity = intensity
+
+    def _determine_phase(self, total_heat: float) -> str:
+        """
+        根据热度与官方发声情况判定生命周期阶段。
+        """
+        # 官方在上一轮是否发声
+        recent_official = [
+            p for p in self.posts if p.time_step == self.t - 1 and p.author == "BrandOfficial"
+        ]
+        if recent_official:
+            self.official_has_spoken = True
+
+        if self.official_has_spoken:
+            return "Climax"
+        if total_heat > 2000:
+            return "Fermentation"
+        if total_heat > 500:
+            return "Diffusion"
+        return "Incubation"
 
     def _add_post(
         self,
@@ -173,7 +225,7 @@ class SocialEnv:
             self.topic_manager.add_post(topic, text, current_time=self.t, reach=reach)
 
     def step(self, pr_strategy=None, request_delay: float = 0.0):
-        """推进一个时间步，按权重驱动 Agent 发声。"""
+        """推进一个时间步：更新热度/强度/phase，构造 env_context，再按权重驱动 Agent 发声。"""
         self.t += 1
         new_posts: List[Post] = []
         observed = [
@@ -189,6 +241,22 @@ class SocialEnv:
             for p in self.posts
             if p.time_step == self.t - 1
         ]
+        posts_last_step = [p for p in self.posts if p.time_step == self.t - 1]
+
+        # ---- 预计算环境信号 ----
+        total_heat = 0.0
+        if self.topic_manager and self._topics:
+            total_heat = sum(self.topic_manager.get_heat(tp) for tp in self._topics)
+        self.phase = self._determine_phase(total_heat)
+        self._update_hawkes_state(len(posts_last_step))
+        global_tension = float(np.tanh(self.current_intensity / 100.0))
+
+        # ---- 环境上下文传递给 Agent ----
+        env_context = {
+            "phase": self.phase,
+            "global_tension": global_tension,
+            "is_official_intervened": self.official_has_spoken,
+        }
 
         # ---- 基于 Hawkes 参数 + 角色画像的权重调度 ----
         mu_fast = self._hawkes_params.get("mu_fast", 0.5) if self._hawkes_params else 0.5
@@ -196,13 +264,13 @@ class SocialEnv:
         lambda_fast = self._hawkes_params.get("lambda_fast", 1.0) if self._hawkes_params else 1.0
         lambda_slow = self._hawkes_params.get("lambda_slow", 0.3) if self._hawkes_params else 0.3
         base_map = {
-            "official_media": 0.35 * mu_slow,
-            "kol": 0.30 * mu_fast,
-            "troll": 0.15 * mu_fast,
-            "defender": 0.10 * mu_fast,
-            "crowd": 0.35 * mu_slow,
+            "BrandOfficial": 0.35 * mu_slow,
+            "KOL": 0.30 * mu_fast,
+            "Troll": 0.15 * mu_fast,
+            "Defender": 0.10 * mu_fast,
+            "Crowd": 0.35 * mu_slow,
         }
-        fast_roles = {"kol", "troll", "defender"}
+        fast_roles = {"KOL", "Troll", "Defender"}
         alpha_heat = 0.12  # 热度对出场概率的放大系数（更温和）
 
         weights = []
@@ -245,13 +313,50 @@ class SocialEnv:
             if request_delay > 0:
                 time.sleep(request_delay)
 
+            # 用环境信号驱动 agent 的混合决策
+            signal_post = type("EnvSignal", (), {})()
+            setattr(signal_post, "heat", total_heat)
+            setattr(signal_post, "author_role", "official" if self.official_has_spoken else "rumor")
+            setattr(signal_post, "is_verified", self.official_has_spoken)
+            if hasattr(agent, "driver_mode") and hasattr(agent, "decide_action"):
+                try:
+                    decision = agent.decide_action(signal_post, env_context)
+                except Exception:
+                    decision = None
+            else:
+                decision = None
+
             if pr_strategy and name == "BrandOfficial":
                 action = pr_strategy.decide_brand_action(self.t, agent, observed)
             else:
-                action = agent.decide_social_action(self.t, observed, environment=self)
+                if decision and isinstance(decision, tuple):
+                    if decision[0] == "REPOST":
+                        # Reflex 模式快速转发
+                        action = {
+                            "action": "retweet",
+                            "post_text": "",
+                            "sentiment": "NEUTRAL",
+                            "target_post_id": None,
+                            "topic": None,
+                        }
+                    else:
+                        action = agent.decide_social_action(self.t, observed, environment=self)
+                else:
+                    action = agent.decide_social_action(self.t, observed, environment=self)
 
-            if action is None:
-                continue
+            # 如仍为沉默/None，使用简单回退逻辑避免全局沉默
+            if action is None or action.get("action") in (None, "silent", "SILENCE"):
+                if observed:
+                    target = observed[0]
+                    action = {
+                        "action": "retweet",
+                        "post_text": "",
+                        "sentiment": "NEUTRAL",
+                        "target_post_id": target.get("id"),
+                        "topic": target.get("topic"),
+                    }
+                else:
+                    continue
 
             act_type = action.get("action") or action.get("type")
             if act_type == "post":

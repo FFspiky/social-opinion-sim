@@ -44,7 +44,7 @@ def build_agents(llm: LLMClient, topics: Optional[List[str]] = None) -> Dict[str
 
     agents["BrandOfficial"] = Agent(
         name="BrandOfficial",
-        role="official_media",
+        role="BrandOfficial",
         profile="权威媒体/官方：客观、冷静、强调核实，不信谣不传谣。",
         llm_client=llm,
         topics=topics,
@@ -52,7 +52,7 @@ def build_agents(llm: LLMClient, topics: Optional[List[str]] = None) -> Dict[str
 
     agents["KOL"] = Agent(
         name="KOL",
-        role="kol",
+        role="KOL",
         profile="意见领袖/营销号：爱带节奏，反问、悬念、情绪化吸引流量。",
         llm_client=llm,
         topics=topics,
@@ -60,7 +60,7 @@ def build_agents(llm: LLMClient, topics: Optional[List[str]] = None) -> Dict[str
 
     agents["Troll"] = Agent(
         name="Troll",
-        role="troll",
+        role="Troll",
         profile="极端情绪/杠精：尖锐、嘲讽、挑衅，擅长制造冲突。",
         llm_client=llm,
         topics=topics,
@@ -68,7 +68,7 @@ def build_agents(llm: LLMClient, topics: Optional[List[str]] = None) -> Dict[str
 
     agents["Defender"] = Agent(
         name="Defender",
-        role="defender",
+        role="Defender",
         profile="死忠粉/护卫队：极度护短，控评、呼吁理性，抵制黑子。",
         llm_client=llm,
         topics=topics,
@@ -76,7 +76,7 @@ def build_agents(llm: LLMClient, topics: Optional[List[str]] = None) -> Dict[str
 
     agents["Crowd"] = Agent(
         name="Crowd",
-        role="crowd",
+        role="Crowd",
         profile="吃瓜群众：路人心态，简短跟风，热度高时才出现。",
         llm_client=llm,
         topics=topics,
@@ -109,17 +109,16 @@ def build_graph(agent_names):
 
 def inject_initial_rumor(env: SocialEnv, topic: str | None = None):
     """
-    t=0，媒体发第一条热点爆料。
+    t=0，媒体发第一条热点爆料（无需 LLM，按话题生成简短引子）。
     """
-    any_agent = next(iter(env.agents.values()))
-    llm = any_agent.llm
-
-    system = "你是一个科技媒体账号，语气略带煽动。"
-    if topic:
-        user = f"""写一条关于“{topic}”的爆料帖，可以质疑其中的风险或可信度，但不要太长，1~2 句话。"""
-    else:
-        user = """写一条关于“热点科技产品存在安全隐患”的爆料帖，可以质疑其可靠性，但不要太长，1~2 句话。"""
-    text = llm.chat(system, user)
+    base_topic = topic or "某热点事件"
+    templates = [
+        f"【最新爆料】{base_topic} 疑似有反转，细节还在核实，大家怎么看？",
+        f"听说 {base_topic} 又有新瓜，真假未证，先吃瓜围观。",
+        f"{base_topic} 刷屏了，内部人士称情况复杂，等官方通报？",
+        f"{base_topic} 有人爆料存在风险，暂未证实，理性围观。",
+    ]
+    text = random.choice(templates)
 
     env._add_post(
         author="Media1",

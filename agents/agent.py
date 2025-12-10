@@ -6,6 +6,7 @@ from typing import Dict, Any, List, Optional
 import random
 import numpy as np
 
+from config.styles import STYLE_GUIDE
 from .memory import MemoryStream
 
 
@@ -13,10 +14,10 @@ class Agent:
     """
     多智能体舆论模拟中的单个 Agent。
     特点：
-    - 拥有角色类型（brand_official / angry_user / neutral_user / fan_user / media 等）
-    - 拥有人物设定 profile（背景、性格）
+    - 角色类型支持 BrandOfficial / KOL / Troll / Defender / Crowd（上层传入的 role 决定 driver_mode）
+    - 拥有人物设定 profile（背景、性格）与心理动力学参数
     - 拥有 MemoryStream（记忆系统）
-    - 能根据看到的帖子在社交媒体上决定：post / retweet / silent
+    - 能根据看到的帖子在社交媒体上决定：post / retweet / silent，并支持 reflex/brain 双驱动
     """
 
     def __init__(
@@ -30,7 +31,7 @@ class Agent:
     ):
         """
         :param name: Agent 名字（如 "BrandOfficial", "AngryUser1"）
-        :param role: 角色类型（如 "brand_official", "angry_user"）
+        :param role: 角色类型（如 "BrandOfficial"/"KOL"/"Troll"/"Defender"/"Crowd"，用于确定 driver_mode）
         :param profile: 角色设定描述（自然语言）
         :param llm_client: 封装好的 LLMClient，拥有 chat / chat_thinking 方法
         :param topics: 关注的话题列表
@@ -44,6 +45,19 @@ class Agent:
         self.attention_weights = self._init_attention_weights(attention_weights)
         self.history: List[str] = []
         self.memory = MemoryStream(llm_client=llm_client)
+        self.driver_mode = "brain" if self.role in ("BrandOfficial", "KOL", "Troll") else "reflex"
+        self.psychology = {
+            "conformity": np.random.beta(2, 5),
+            "susceptibility": np.random.beta(2, 2),
+            "ideology": np.random.random(),
+            "risk_tolerance": 0.1 if self.role == "BrandOfficial" else np.random.beta(2, 5),
+            "current_anger": 0.0,
+        }
+        self.trust_matrix = {
+            "official": 0.9 if self.role == "BrandOfficial" else 0.6,
+            "kol": 0.7,
+            "rumor": 0.2,
+        }
 
     def _init_attention_weights(
         self, provided_weights: Optional[Dict[str, float]]
@@ -239,29 +253,42 @@ class Agent:
         }
         """
         role_prompts = {
-            "official_media": (
+            "BrandOfficial": (
                 "你是权威媒体/官方账号，语气正式客观，强调核实、等待通报，不信谣不传谣。"
             ),
-            "kol": (
+            "KOL": (
                 "你是微博意见领袖/营销号，带节奏、善用反问和悬念，语气接地气，情绪化以求流量。"
             ),
-            "troll": (
+            "Troll": (
                 "你是极端情绪用户/杠精，发言尖锐、嘲讽、攻击或阴阳怪气，擅长挑衅。"
             ),
-            "defender": (
+            "Defender": (
                 "你是死忠粉/护卫队，极度护短，控评、呼吁理性，反击黑子，充满爱意或防御性。"
             ),
-            "crowd": (
+            "Crowd": (
                 "你是吃瓜群众，超短评、跟风、好奇打卡，立场摇摆，偶尔只@好友或发表情。"
             ),
         }
         role_hint = role_prompts.get(self.role, "你是一个普通用户，保持简洁、多样化表达，避免复读。")
+        style = STYLE_GUIDE.get(self.role, STYLE_GUIDE.get("Crowd", {}))
+        role_description = style.get("description", "普通用户")
+        keywords = ", ".join(style.get("keywords", []))
+        sentence_patterns = " | ".join(style.get("sentence_patterns", []))
+        tone_instruction = style.get("tone_instruction", "")
+        style_block = (
+            "【语言风格要求】\n"
+            f"你现在的身份是微博上的【{role_description}】。请严格遵守以下说话方式：\n"
+            f"1. 必须包含关键词（选2-3个）: {keywords}\n"
+            f"2. 推荐句式参考: {sentence_patterns}\n"
+            f"3. 语气指令: {tone_instruction}"
+        )
         system = (
             f"{role_hint}"
             " 你需要根据记忆和看到的帖子，决定是否发声。"
             " 严格输出 JSON，不要输出多余文字。"
             " 所有内容必须使用简体中文。"
         )
+        system = f"{system}\n{style_block}"
         forced_topic = self.select_topic(environment=environment)
         user = self._build_social_prompt(t, observed_posts, forced_topic=forced_topic)
 
@@ -302,3 +329,72 @@ class Agent:
             action["topic"] = forced_topic
 
         return action
+
+    def _calculate_reflex_action(self, post, env_context):
+        """
+        反射型智能体基于概率的快速决策：返回 ("REPOST"/"SILENCE", mode)。
+        """
+        context = env_context or {}
+        global_tension = context.get("global_tension", 0.5)
+
+        emotional_boost = self.psychology.get("susceptibility", 0.0) * global_tension
+        heat = getattr(post, "heat", 0.0) or 0.0
+        social_boost = self.psychology.get("conformity", 0.0) * np.log1p(heat)
+        trust_factor = self.trust_matrix.get(getattr(post, "author_role", None), 0.5)
+
+        risk_penalty = 0.0
+        verified = getattr(post, "is_verified", False)
+        low_risk_tolerance = self.psychology.get("risk_tolerance", 0.0) < 0.3
+        too_angry = self.psychology.get("current_anger", 0.0) > 0.7
+        if not verified and low_risk_tolerance and not too_angry:
+            risk_penalty = 5.0
+
+        logit = (0.5 + emotional_boost + social_boost) * trust_factor - risk_penalty
+        prob_repost = 1 / (1 + np.exp(-(logit - 2.0)))
+
+        dice = np.random.random()
+        if dice < prob_repost:
+            return ("REPOST", "forward_only")
+        return ("SILENCE", None)
+
+    def _call_llm_decision(self, post, env_context=None):
+        """
+        深度（brain）模式的决策，封装 LLM 调用；默认无法生成时保持沉默。
+        """
+        if not hasattr(self.llm, "chat"):
+            return ("SILENCE", None)
+
+        context = env_context or {}
+        global_tension = context.get("global_tension", 0.5)
+        author_role = getattr(post, "author_role", "unknown")
+        content = getattr(post, "text", "") or getattr(post, "content", "")
+        verified = getattr(post, "is_verified", False)
+        heat = getattr(post, "heat", 0.0)
+
+        system = (
+            f"你是 {self.name}（角色：{self.role}），需要深思熟虑地决定是否转发或沉默。"
+            " 只输出 REPOST 或 SILENCE。"
+        )
+        user = (
+            f"帖子作者角色: {author_role}\n"
+            f"热度: {heat}\n"
+            f"是否已证实: {verified}\n"
+            f"全局紧张度: {global_tension}\n"
+            f"帖子内容: {content}"
+        )
+        try:
+            resp = self.llm.chat(system, user)
+            normalized = str(resp).strip().upper()
+            if normalized.startswith("REPOST"):
+                return ("REPOST", "llm_brain")
+        except Exception:
+            pass
+        return ("SILENCE", None)
+
+    def decide_action(self, post, env_context=None):
+        """
+        混合驱动决策入口：reflex 模式走概率，brain 模式走 LLM。
+        """
+        if self.driver_mode == "reflex":
+            return self._calculate_reflex_action(post, env_context)
+        return self._call_llm_decision(post, env_context)

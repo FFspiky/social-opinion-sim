@@ -3,11 +3,12 @@
 基于多角色 + Hawkes 双衰减核（爆发/长尾）的舆论演化实验，提供训练、模拟、前端可视化与真实数据对比。
 
 ## 核心更新
-- **全局优化回归**：`train.py` 新增 CMA-ES 粗搜 + 多起点 L-BFGS-B 精调（`--use_global_init`），保留原有多初始 L-BFGS-B。
-- **数据归一化**：`utils/data_loader.py` 默认对每个事件按 `|heat|` 最大值归一化，并在事件字典返回 `scale`。
-- **集中配置**：`config/settings.py` 汇总默认话题、数据目录（支持 DATA_DIR/FALLBACK）、真实数据路径、Hawkes/LLM 默认参数；`load_hawkes_params` 统一从 `artifacts/hawkes_params.json` 读取。
-- **脚本默认值对齐**：`simulate.py`/`app_streamlit.py`/`agents/llm_client.py`/`test_oos.py` 读取配置默认值；训练/模拟默认使用最新工件参数。
-- **依赖**：`requirements.txt` 新增 `cma>=3.2.2`。
+- **双驱动 Agent**：`agents/agent.py` 引入心理参数、信任矩阵和 driver_mode（brain/reflex）；新增风格模板 `config/styles.py`，按角色注入微博话语风格。
+- **环境动力学**：`env/social_env.py` 按 Hawkes 强度与热度实时计算 phase 和 global_tension，并下发 env_context 影响决策，防止全局沉默时自动回退转发。
+- **初始播种**：`simulate.py::inject_initial_rumor` 使用话题相关模板随机生成首条爆料，无需 LLM。
+- **全局优化回归**：`train.py` 支持 CMA-ES 粗搜 + 多起点 L-BFGS-B 精调（`--use_global_init`），保留多初始 L-BFGS-B。
+- **配置集中**：`config/settings.py` 汇总默认话题、数据目录、真实数据路径、Hawkes/LLM 默认参数；`load_hawkes_params` 统一读取 `artifacts/hawkes_params.json`。
+- **依赖**：`requirements.txt` 含 `cma>=3.2.2` 等。
 
 ## 环境准备
 ```bash
@@ -19,10 +20,10 @@ pip install -r requirements.txt
 
 ## 配置与数据
 - **默认话题**：见 `config/settings.py::DEFAULT_TOPICS`（前 5 个中文话题）。
-- **数据目录**：`DATA_DIR` 环境变量或默认 `datasets_huoju_norm`，若不存在回退 `dataset_peak350`（包含训练用 `classified_events_35_2024Q1-Q4_peak350_v2.csv` 及可视化图片）。
+- **数据目录**：`DATA_DIR` 环境变量或默认 `datasets_huoju_norm`，若不存在回退 `dataset_peak350`。
 - **真实数据路径**：`config.settings.DEFAULT_REAL_DATA_PATH`（默认指向 `../huoju/dataset_peak350/classified_events_35_2024Q1-Q4_peak350_v2.csv`）。
 - **Hawkes 参数来源**：优先 `artifacts/hawkes_params.json`，否则使用配置内默认值。
-- **LLM 配置**：默认基址 `https://api.openai-proxy.org/v1`，可用环境变量 `CLOSEAI_API_KEY/CLOSEAI_BASE_URL/CLOSEAI_MODEL` 覆盖。
+- **LLM 配置**：默认基址 `https://api.openai-proxy.org/v1`，可用环境变量 `CLOSEAI_API_KEY/CLOSEAI_BASE_URL/CLOSEAI_MODEL` 覆盖；未配置/连不上时 brain 模式角色可能沉默。
 
 ## 训练 Hawkes 参数
 双衰减核形式：
@@ -67,7 +68,7 @@ python train.py \
 ```bash
 python simulate.py
 ```
-- 主要逻辑：`simulate.py::run_and_compare` 调用 `simulate_steps` 生成模拟热度，按真实数据对齐后计算整体/分话题 MSE、MAPE 并绘图。
+- 主要逻辑：`simulate.py::run_and_compare` 调用 `simulate_steps` 生成模拟热度，按真实数据对齐后计算整体/分话题 MSE、MAPE 并绘图。`simulate_steps` 会为每个话题注入首条爆料，环境按 Hawkes 强度/热度计算 phase 与 global_tension，并传入 Agent。
 
 ## 交互前端
 ```bash
@@ -79,13 +80,13 @@ streamlit run app_streamlit.py
 
 ## 主要模块
 - `config/settings.py`：默认话题、数据路径、Hawkes/LLM 默认参数，`load_hawkes_params()`、`get_data_dir()`、`get_real_data_path()`。
-- `train.py`：CMA-ES + 多起点 L-BFGS-B 全局拟合（可选旧流程）。
+- `config/styles.py`：按角色定义微博风格提示，Agent 构造 system prompt 时注入。
+- `train.py`：CMA-ES + 多起点 L-BFGS-B 拟合双衰减核（可选旧流程）。
 - `utils/data_loader.py`：CSV 加载与 80/10/10 切分；normalize=True 时返回 `scale`。
 - `utils/spread_model.py`：双衰减核预测。
-- `simulate.py`：多 Agent 仿真，生成热度曲线并与真实数据对比。
-- `app_streamlit.py`：前端交互页面。
-- `agents/agent.py`、`env/social_env.py`：角色行为、热度与出场权重调度。
-- `agents/llm_client.py`：LLM 调用封装（含重试与默认代理基址）。
+- `simulate.py`：多 Agent 仿真，种子爆料、热度曲线、与真实数据对比。
+- `env/social_env.py`：Hawkes 记忆与热度、phase/global_tension、出场权重调度、env_context 下发。
+- `agents/agent.py`：双驱动（brain/reflex）决策、心理/信任参数、风格化 prompt；`agents/llm_client.py`：LLM 调用封装。
 
 ## 调参建议
 - 若全局搜索不稳定：调大 `cma_sigma0`（如 0.5）、`perturb_scale`（如 0.3）、`cma_popsize`（如 32）、`global_n_starts`（如 50）、`cma_maxiter`（如 60）。
